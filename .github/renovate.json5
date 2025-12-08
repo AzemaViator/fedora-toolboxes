@@ -1,0 +1,49 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:best-practices"
+  ],
+
+  "packageRules": [
+    {
+      "automerge": true,
+      "matchUpdateTypes": ["pin", "pinDigest"]
+    },
+    {
+      "enabled": false,
+      "matchUpdateTypes": ["digest", "pinDigest", "pin"],
+      "matchDepTypes": ["container"],
+      "matchFileNames": [".github/workflows/**.yaml", ".github/workflows/**.yml", ".devcontainer/Containerfile"]
+    },
+    {
+      "matchPackageNames": [
+        "registry.fedoraproject.org/*",
+      ],
+      "groupName": "images",
+      "matchUpdateTypes": [
+        "digest"
+      ],
+      "automerge": true
+    },
+    {
+      "matchPackageNames": [
+        "registry.fedoraproject.org/*",
+      ],
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch"
+      ],
+      "enabled": false
+    },
+    {
+      "matchPackageNames": [
+        "quay.io/fedora/fedora"
+      ],
+      "matchFileNames": [
+        ".devcontainer/Containerfile"
+      ],
+      "enabled": false
+    }
+  ]
+}

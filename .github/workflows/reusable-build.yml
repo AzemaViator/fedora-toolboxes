@@ -1,0 +1,259 @@
+name: build-ublue
+on:
+  workflow_call:
+    inputs:
+      image_version:
+        description: "The Version: gts, latest, beta... Justfile holds value"
+        required: true
+        type: string
+      image_name:
+        description: "The name of the image to build.  E.G. base, silverblue"
+        required: true
+        type: string
+      image_variant:
+        description: "The variant of image to build.  E.G. main, nvidia"
+        required: false
+        type: string
+        default: "main"
+
+env:
+  IMAGE_REGISTRY: ghcr.io/${{ github.repository_owner }}
+  SET_X: 1
+
+jobs:
+  check-build-required:
+    name: Check if build is required
+    runs-on: ubuntu-latest
+    outputs:
+      build_required: ${{ steps.check.outputs.build_required }}
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+        with:
+          ref: main
+          path: main
+          fetch-depth: 0
+
+      - name: Checkout PR branch
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+        with:
+          path: pr
+          fetch-depth: 0
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+
+      - name: Setup Just
+        # yamllint disable-line rule:line-length rule:comments
+        uses: extractions/setup-just@e33e0265a09d6d736e2ee1e0eb685ef1de4669ff # v3
+
+      - name: Compare image digests to determine if build is required
+        id: check
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ inputs.image_name }}
+          IMAGE_VERSION_ALIAS: ${{ inputs.image_version }}
+          IMAGE_VARIANT: ${{ inputs.image_variant }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -e
+
+          # Always build when workflow_dispatch is triggered
+          if [ "${EVENT_NAME}" == "workflow_dispatch" ]; then
+            echo "Build triggered by workflow_dispatch - always building"
+            echo "build_required=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Fetch version from the Justfile
+          IMAGE_VERSION=$(just -f ./pr/Justfile --evaluate "${IMAGE_VERSION_ALIAS}")
+
+          BASE_NAME="${IMAGE_NAME}-${IMAGE_VERSION}"
+
+          OLD_BASE_DIGEST=$(yq -r ".images[] | select(.name == \"${BASE_NAME}\") | .digest" main/image-versions.yaml)
+          NEW_BASE_DIGEST=$(yq -r ".images[] | select(.name == \"${BASE_NAME}\") | .digest" pr/image-versions.yaml)
+
+          echo "Comparing digests:"
+          echo "Base image old: ${OLD_BASE_DIGEST}, new: ${NEW_BASE_DIGEST}"
+
+          BUILD_REQUIRED=false
+
+          if [ "$OLD_BASE_DIGEST" != "$NEW_BASE_DIGEST" ]; then
+            echo "Base digest changed."
+            BUILD_REQUIRED=true
+          fi
+
+          # If any file other than image-versions.yaml has changed, we also need to build.
+          echo "Checking for changes outside image-versions.yaml..."
+
+          # Run recursive diff and collect output
+          ALL_DIFFS=$(diff -rq --exclude='.git' main/ pr/ || true)
+
+          # Define exclusions (as regex patterns)
+          EXCLUDED_DIFF_PATTERNS=(
+            "Only in.*/image-versions.yaml"
+            "Files .*image-versions.yaml and .*image-versions.yaml differ"
+          )
+
+          # Filter out excluded diffs
+          FILTERED_DIFFS="$ALL_DIFFS"
+          for pattern in "${EXCLUDED_DIFF_PATTERNS[@]}"; do
+            FILTERED_DIFFS=$(echo "$FILTERED_DIFFS" | grep -Ev "$pattern" || true)
+          done
+
+          # Output filtered changes
+          if [[ -n "$FILTERED_DIFFS" ]]; then
+            echo "Other files changed:"
+            echo "$FILTERED_DIFFS"
+            BUILD_REQUIRED=true
+          else
+            echo "No other files changed."
+          fi
+
+          echo "build_required=${BUILD_REQUIRED}" >> "$GITHUB_OUTPUT"
+
+  build_ublue:
+    name: main
+    runs-on: ubuntu-24.04
+    needs: check-build-required
+    if: ${{ needs.check-build-required.outputs.build_required == 'true' }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - name: Mount BTRFS for podman storage
+        id: container-storage-action
+        uses: ublue-os/container-storage-action@911baca08baf30c8654933e9e9723cb399892140
+        continue-on-error: true
+        with:
+          mount-opts: compress-force=zstd:2
+          loopback-free: '1'
+
+        # Checkout Git Repository
+      - name: Checkout
+        # yamllint disable-line rule:line-length rule:comments
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+
+      - name: Setup Just
+        # yamllint disable-line rule:line-length rule:comments
+        uses: extractions/setup-just@e33e0265a09d6d736e2ee1e0eb685ef1de4669ff # v3
+
+      - name: Build Image
+        shell: bash
+        run: |
+          set -x
+          just build-container \
+               "${{ inputs.image_name }}" \
+               "${{ inputs.image_version }}" \
+               "${{ inputs.image_variant }}" \
+               "${{ github.event_name }}"
+
+      # Workaround bug where capital letters in your GitHub username make it impossible to push to GHCR.
+      # https://github.com/macbre/push-to-ghcr/issues/12
+      - name: Lowercase Registry
+        id: registry_case
+        uses: ASzc/change-string-case-action@d0603cd0a7dd490be678164909f65c7737470a7f # v6
+        with:
+          string: ${{ env.IMAGE_REGISTRY }}
+
+      - name: Push To GHCR
+        id: push
+        if: github.event_name != 'pull_request'
+        env:
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          just login-to-ghcr "$REGISTRY_USER" "$REGISTRY_TOKEN"
+          just push-to-registry \
+              "${{ inputs.image_name }}" \
+              "${{ inputs.image_version }}" \
+              "${{ inputs.image_variant }}" \
+              "${{ steps.registry_case.outputs.lowercase }}"
+
+      - name: Sign Container Image
+        id: sign
+        if: github.event_name != 'pull_request'
+        env:
+          COSIGN_EXPERIMENTAL: false
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          just cosign-sign \
+              "${{ inputs.image_name }}" \
+              "${{ inputs.image_version }}" \
+              "${{ inputs.image_variant }}" \
+              "${{ steps.registry_case.outputs.lowercase }}"
+
+      - name: SBOM Setup
+        if: false
+        run: |
+          set -eou pipefail
+          echo "=== FREE SPACE ==="
+          df -h
+          echo "=== MEMORY AND SWAP ==="
+          free -h
+          swapon --show
+          echo "=== MAKING SWAPFILE ==="
+          sudo swapoff /mnt/swapfile
+          sudo rm -f /mnt/swapfile
+          SWAP_FILE="/mnt/swapfile"
+          sudo fallocate -l 70G "$SWAP_FILE"
+          sudo chmod 600 "$SWAP_FILE"
+          sudo mkswap "$SWAP_FILE"
+          sudo swapon "$SWAP_FILE"
+          echo "=== FREE SPACE ==="
+          df -h
+          echo "=== MEMORY AND SWAP ==="
+          free -h
+          swapon --show
+
+      - name: Generate SBOM
+        id: sbom
+        if: false
+        shell: bash
+        run: |
+          systemctl enable --now --user podman.socket
+
+          sbom=$(just gen-sbom \
+              "${{ inputs.image_name }}" \
+              "${{ inputs.image_version }}" \
+              "${{ inputs.image_variant }}")
+          echo "sbom=$sbom" >> "$GITHUB_OUTPUT"
+
+      - name: Attest SBOM
+        id: attest
+        shell: bash
+        if: false
+        run: |
+          just sbom-attest \
+              "${{ inputs.image_name }}" \
+              "${{ inputs.image_version }}" \
+              "${{ inputs.image_variant }}" \
+              "${{ steps.registry_case.outputs.lowercase }}" \
+              "${{ steps.sbom.outputs.sbom }}"
+
+  check:
+    name: Check all ${{ inputs.image_name }}:${{ inputs.image_version }} builds successful
+    if: always()
+    runs-on: ubuntu-latest
+    needs: [build_ublue]
+    steps:
+      - name: Check Jobs
+        env:
+          JOBS: ${{ toJson(needs) }}
+        run: |
+          echo "Job status:"
+          echo $JOBS | jq -r 'to_entries[] | " - \(.key): \(.value.result)"'
+
+          for i in $(echo $JOBS | jq -r 'to_entries[] | .value.result'); do
+            if [ "$i" != "success" ] && [ "$i" != "skipped" ]; then
+              echo ""
+              echo "Status check not okay!"
+              exit 1
+            fi
+          done

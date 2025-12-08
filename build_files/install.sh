@@ -1,0 +1,95 @@
+#!/usr/bin/bash
+
+set -ouex pipefail
+
+# Copy System Files onto root
+rsync -rvK /ctx/sys_files/ /
+
+# make root's home
+mkdir -p /var/roothome
+
+# Install dnf5 if not installed
+if ! rpm -q dnf5 >/dev/null; then
+    dnf -y install dnf5 dnf5-plugins
+fi
+
+# mitigate upstream packaging bug: https://bugzilla.redhat.com/show_bug.cgi?id=2332429
+# swap the incorrectly installed OpenCL-ICD-Loader for ocl-icd, the expected package
+dnf5 -y swap --repo='fedora' \
+    OpenCL-ICD-Loader ocl-icd
+
+# Add COPRs
+dnf5 -y copr enable ublue-os/packages
+dnf5 -y copr enable ublue-os/staging
+
+# Install ublue-os packages, fedora archives,and zstd
+dnf5 -y install \
+    ublue-os-just \
+    ublue-os-signing \
+    fedora-repos-archive \
+    zstd
+
+# use negativo17 for 3rd party packages with higher priority than default
+if ! grep -q fedora-multimedia <(dnf5 repolist); then
+    # Enable or Install Repofile
+    dnf5 config-manager setopt fedora-multimedia.enabled=1 ||
+        dnf5 config-manager addrepo --from-repofile="https://negativo17.org/repos/fedora-multimedia.repo"
+fi
+# Set higher priority
+dnf5 config-manager setopt fedora-multimedia.priority=90
+
+# Replace podman provided policy.json with ublue-os one when present.
+if [[ -f /usr/etc/containers/policy.json ]]; then
+    mv /usr/etc/containers/policy.json /etc/containers/policy.json
+fi
+
+# use override to replace mesa and others with less crippled versions
+OVERRIDES=(
+    "intel-gmmlib"
+    "intel-mediasdk"
+    "intel-vpl-gpu-rt"
+    "libheif"
+    "libva"
+    "libva-intel-media-driver"
+    "mesa-dri-drivers"
+    "mesa-filesystem"
+    "mesa-libEGL"
+    "mesa-libGL"
+    "mesa-libgbm"
+    "mesa-va-drivers"
+    "mesa-vulkan-drivers"
+)
+
+dnf5 distro-sync --skip-unavailable -y --repo='fedora-multimedia' "${OVERRIDES[@]}"
+dnf5 versionlock add "${OVERRIDES[@]}"
+
+# Remove Fedora Flatpak and related packages
+dnf5 remove -y \
+    fedora-flathub-remote
+
+# fedora-third-party has a trojan horse via plasma-discover requiring it in its spec, replace it with a dummy package.
+dnf5 swap -y \
+    fedora-third-party ublue-os-flatpak
+
+# Add Flathub to the image for eventual application
+mkdir -p /etc/flatpak/remotes.d/
+curl --retry 3 -Lo /etc/flatpak/remotes.d/flathub.flatpakrepo https://dl.flathub.org/repo/flathub.flatpakrepo
+
+# Fedora Flatpak service is a part of the flatpak package, ensure it's overridden by moving to replace it at the end of the build.
+mv -f /usr/lib/systemd/system/flatpak-add-flathub-repos.service /usr/lib/systemd/system/flatpak-add-fedora-repos.service
+
+# Prevent partial QT upgrades that may break SDDM/KWin
+if [[ "$IMAGE_NAME" == "kinoite" ]]; then
+    dnf5 versionlock add "qt6-*"
+fi
+
+# Ensure jq is available for package parsing
+if ! rpm -q jq >/dev/null; then
+    dnf5 -y install jq
+fi
+
+# run common packages script
+/ctx/packages.sh
+
+## install packages direct from github
+/ctx/github-release-install.sh sigstore/cosign x86_64

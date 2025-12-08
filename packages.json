@@ -1,0 +1,122 @@
+{
+  "all": {
+    "include": {
+      "all": [
+        "alsa-firmware",
+        "apr",
+        "apr-util",
+        "bash-completion",
+        "bc",
+        "bzip2",
+        "curl",
+        "fdk-aac",
+        "ffmpeg",
+        "ffmpeg-libs",
+        "ffmpegthumbnailer",
+        "fish",
+        "flatpak-spawn",
+        "fuse",
+        "fzf",
+        "glibc-all-langpacks",
+        "glibc-locale-source",
+        "gnupg2",
+        "gnupg2-smime",
+        "google-noto-sans-balinese-fonts",
+        "google-noto-sans-cjk-fonts",
+        "google-noto-sans-javanese-fonts",
+        "google-noto-sans-sundanese-fonts",
+        "heif-pixbuf-loader",
+        "hostname",
+        "htop",
+        "intel-vaapi-driver",
+        "iproute",
+        "iputils",
+        "just",
+        "keyutils",
+        "less",
+        "libavcodec",
+        "libcamera",
+        "libcamera-gstreamer",
+        "libcamera-ipa",
+        "libcamera-tools",
+        "libfdk-aac",
+        "libheif",
+        "libimobiledevice-utils",
+        "libva-utils",
+        "lshw",
+        "man-db",
+        "man-pages",
+        "mesa-dri-drivers",
+        "mesa-vulkan-drivers",
+        "ncurses",
+        "net-tools",
+        "nss-mdns",
+        "nvme-cli",
+        "nvtop",
+        "openssh-clients",
+        "openssl",
+        "pam",
+        "passwd",
+        "pigz",
+        "pinentry",
+        "pipewire-libs-extra",
+        "pipewire-plugin-libcamera",
+        "powerstat",
+        "procps-ng",
+        "ripgrep",
+        "rsync",
+        "script",
+        "shadow-utils",
+        "smartmontools",
+        "squashfs-tools",
+        "sudo",
+        "symlinks",
+        "tcpdump",
+        "time",
+        "tmux",
+        "traceroute",
+        "tree",
+        "tzdata",
+        "unzip",
+        "usbmuxd",
+        "util-linux",
+        "vim",
+        "vte-profile",
+        "vulkan",
+        "wget",
+        "which",
+        "whois",
+        "wireguard-tools",
+        "wl-clipboard",
+        "xhost",
+        "xorg-x11-xauth",
+        "xz",
+        "yubikey-manager",
+        "zip",
+        "zsh",
+        "zstd"
+      ],
+      "fedora-toolbox-systemd": [
+        "dbus-daemon",
+        "systemd"
+      ]
+    },
+    "exclude": {
+      "all": [
+        "default-fonts-cjk-sans",
+        "google-noto-sans-cjk-vf-fonts"
+      ]
+    }
+  },
+  "42": {
+    "include": {
+      "all": [
+        "android-udev-rules",
+        "mesa-libxatracker"
+      ]
+    },
+    "exclude": {
+      "all": []
+    }
+  }
+}
