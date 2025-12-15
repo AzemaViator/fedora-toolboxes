@@ -17,4 +17,4 @@ images:
   - name: akmods-nvidia-open-43
     image: ghcr.io/ublue-os/akmods-nvidia-open
     tag: main-43
-    digest: sha256:94d0f709941ca7738877ad54d2a1959acf86126f2f0a2290159b528f22cc17bd
+    digest: sha256:84a13d7046d33d7d06bcf7a69d4deb889d71c681023f28fb2ecd9d9db6868f39
