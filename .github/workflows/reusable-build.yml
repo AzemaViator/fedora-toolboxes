@@ -142,6 +142,16 @@ jobs:
         # yamllint disable-line rule:line-length rule:comments
         uses: extractions/setup-just@e33e0265a09d6d736e2ee1e0eb685ef1de4669ff # v3
 
+      - name: Login To GHCR
+        id: login-ghcr
+        if: github.event_name != 'pull_request'
+        env:
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          just login-to-ghcr "$REGISTRY_USER" "$REGISTRY_TOKEN"
+
       - name: Build Image
         shell: bash
         run: |
@@ -163,12 +173,8 @@ jobs:
       - name: Push To GHCR
         id: push
         if: github.event_name != 'pull_request'
-        env:
-          REGISTRY_USER: ${{ github.actor }}
-          REGISTRY_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          just login-to-ghcr "$REGISTRY_USER" "$REGISTRY_TOKEN"
           just push-to-registry \
               "${{ inputs.image_name }}" \
               "${{ inputs.image_version }}" \
