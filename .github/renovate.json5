@@ -30,6 +30,7 @@
     {
       "matchPackageNames": [
         "registry.fedoraproject.org/*",
+        "ghcr.io/ublue-os/akmods-nvidia-open",
       ],
       "groupName": "images",
       "matchUpdateTypes": [
@@ -40,6 +41,7 @@
     {
       "matchPackageNames": [
         "registry.fedoraproject.org/*",
+        "ghcr.io/ublue-os/akmods-nvidia-open",
       ],
       "matchUpdateTypes": [
         "major",
