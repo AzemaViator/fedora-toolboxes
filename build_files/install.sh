@@ -94,13 +94,13 @@ if ! rpm -q jq >/dev/null; then
     dnf5 -y install jq
 fi
 
+# run common packages script
+/ctx/packages.sh
+
 # Enable rootless podman subid bootstrap for systemd variant.
 if [[ "${IMAGE_NAME:-}" == "fedora-toolbox-systemd" ]]; then
     systemctl enable podman-subids-setup.service
 fi
-
-# run common packages script
-/ctx/packages.sh
 
 # Distrobox Integration
 git clone --depth=1 --branch "${DISTROBOX_REF}" https://github.com/89luca89/distrobox.git --single-branch /tmp/distrobox
