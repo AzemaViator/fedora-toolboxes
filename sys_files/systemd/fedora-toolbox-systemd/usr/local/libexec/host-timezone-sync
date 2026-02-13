@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Allow callers to opt out and keep container default timezone behavior.
+if [[ "${DISTROBOX_DISABLE_HOST_TZ:-0}" == "1" ]]; then
+    exit 0
+fi
+
+host_localtime="/run/host/etc/localtime"
+if [[ ! -r "${host_localtime}" ]]; then
+    exit 0
+fi
+
+set_utc_fallback() {
+    rm -f /etc/localtime
+    ln -sf /usr/share/zoneinfo/UCT /etc/localtime
+}
+
+# Prefer matching zoneinfo in the container when available.
+host_target="$(readlink -f "${host_localtime}" || true)"
+if [[ -n "${host_target}" && "${host_target}" == /run/host/usr/share/zoneinfo/* ]]; then
+    zone_rel="${host_target#/run/host/usr/share/zoneinfo/}"
+    container_zone="/usr/share/zoneinfo/${zone_rel}"
+    if [[ -r "${container_zone}" ]]; then
+        if findmnt /etc/localtime >/dev/null 2>&1; then
+            umount /etc/localtime
+        fi
+        rm -f /etc/localtime
+        ln -sf "${container_zone}" /etc/localtime
+        exit 0
+    fi
+fi
+
+# Fallback to readonly bind mount of host localtime.
+bind_source="${host_target:-${host_localtime}}"
+if [[ -r "${bind_source}" ]]; then
+    if findmnt /etc/localtime >/dev/null 2>&1; then
+        umount /etc/localtime
+    fi
+    rm -f /etc/localtime
+    touch /etc/localtime
+    if mount --bind "${bind_source}" /etc/localtime; then
+        mount -o remount,bind,ro /etc/localtime || true
+        exit 0
+    fi
+fi
+
+# Last resort: keep deterministic timezone.
+set_utc_fallback

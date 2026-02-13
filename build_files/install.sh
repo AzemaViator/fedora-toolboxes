@@ -99,6 +99,7 @@ fi
 
 # Enable rootless podman subid bootstrap for systemd variant.
 if [[ "${IMAGE_NAME:-}" == "fedora-toolbox-systemd" ]]; then
+    systemctl enable host-timezone-sync.service
     systemctl enable podman-subids-setup.service
 fi
 
