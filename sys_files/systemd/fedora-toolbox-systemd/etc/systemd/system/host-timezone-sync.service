@@ -1,0 +1,15 @@
+[Unit]
+Description=Sync container timezone from host
+ConditionVirtualization=container
+ConditionPathExists=/run/host/etc/localtime
+ConditionEnvironment=!DISTROBOX_DISABLE_HOST_TZ
+After=local-fs.target
+
+[Service]
+Type=oneshot
+PassEnvironment=DISTROBOX_DISABLE_HOST_TZ
+ExecStart=/usr/local/libexec/host-timezone-sync
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -22,6 +22,7 @@ while IFS='=' read -r key val; do
             ;;
         CONTAINER_ID)       emit DISTROBOX_CONTAINER_ID        "$val" ;;
         DISTROBOX_HOST_HOME)emit DISTROBOX_HOST_HOME           "$val" ;;
+        DISTROBOX_DISABLE_HOST_TZ) emit DISTROBOX_DISABLE_HOST_TZ "$val" ;;
         SHLVL)              emit DISTROBOX_SHLVL               "$val" ;;
         TERMINFO_DIRS)      emit DISTROBOX_TERMINFO_DIRS       "$val" ;;
         PATH)               emit DISTROBOX_PATH                "$val" ;;
