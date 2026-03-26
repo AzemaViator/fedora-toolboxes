@@ -89,6 +89,10 @@ fi
 # run common packages script
 /ctx/packages.sh
 
+# Re-apply uidmap helper file capabilities so nested rootless Podman works.
+# In some containerized build/runtime paths these xattrs can be dropped.
+rpm --restore shadow-utils
+
 # Enable rootless podman subid bootstrap for systemd variant.
 if [[ "${IMAGE_NAME:-}" == "fedora-toolbox-systemd" ]]; then
     systemctl enable host-timezone-sync.service
