@@ -1,0 +1,106 @@
+name: Sync Fallback Signing Keys
+
+on:
+  schedule:
+    - cron: "17 7 * * 1" # Weekly Monday
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  sync-keys:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Sync fallback key files
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          is_valid_pubkey() {
+            local file="$1"
+            [[ -s "$file" ]] \
+              && grep -q "BEGIN PUBLIC KEY" "$file" \
+              && grep -q "END PUBLIC KEY" "$file"
+          }
+
+          download_key_url() {
+            local url="$1"
+            local out="$2"
+            local owner repo ref path api_url
+
+            if [[ -n "${GITHUB_TOKEN:-}" && "$url" =~ ^https://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)/(.+)$ ]]; then
+              owner="${BASH_REMATCH[1]}"
+              repo="${BASH_REMATCH[2]}"
+              ref="${BASH_REMATCH[3]}"
+              path="${BASH_REMATCH[4]}"
+              api_url="https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${ref}"
+              if curl --fail --silent --show-error --location --retry 3 --retry-delay 2 \
+                -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                -H "Accept: application/vnd.github.raw" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "$api_url" -o "$out" >/dev/null 2>&1; then
+                return 0
+              fi
+            fi
+
+            curl --fail --silent --show-error --location --retry 3 --retry-delay 2 "$url" -o "$out"
+          }
+
+          sync_key() {
+            local key_url="$1"
+            local key_path="$2"
+            local label="$3"
+            local tmp_key
+            tmp_key="$(mktemp)"
+
+            if ! download_key_url "$key_url" "$tmp_key"; then
+              echo "::warning::Unable to fetch upstream key '$key_url' for '$label'."
+              rm -f "$tmp_key"
+              return 0
+            fi
+
+            if ! is_valid_pubkey "$tmp_key"; then
+              echo "::warning::Fetched upstream key '$key_url' for '$label' is not valid PEM."
+              rm -f "$tmp_key"
+              return 0
+            fi
+
+            if [[ ! -f "$key_path" ]] || ! cmp -s "$tmp_key" "$key_path"; then
+              install -Dm0644 "$tmp_key" "$key_path"
+              echo "Updated fallback key: $label ($key_path)"
+            fi
+
+            rm -f "$tmp_key"
+          }
+
+          sync_key \
+            "https://raw.githubusercontent.com/ublue-os/main/main/cosign.pub" \
+            "build_files/keys/ublue-os-main-cosign.pub" \
+            "ublue-os/main"
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "chore(keys): sync ublue fallback cosign key"
+          branch: "automation/sync-fallback-signing-keys"
+          delete-branch: true
+          title: "chore(keys): sync ublue fallback cosign key"
+          body: |
+            Updates the committed fallback Cosign public key for `ublue-os/main` to match current upstream key material.
+
+            Change included:
+            - `build_files/keys/ublue-os-main-cosign.pub`
+
+            Why this matters:
+            - Keeps fallback verification key current when CI must verify with a local key copy.
+          labels: |
+            automation
+            security

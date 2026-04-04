@@ -1,0 +1,213 @@
+# NyahStack Fedora Toolboxes
+
+[![build-gts](https://github.com/NyahStack/fedora-toolboxes/actions/workflows/build-gts.yml/badge.svg)](https://github.com/NyahStack/fedora-toolboxes/actions/workflows/build-gts.yml)
+[![build-latest](https://github.com/NyahStack/fedora-toolboxes/actions/workflows/build-latest.yml/badge.svg)](https://github.com/NyahStack/fedora-toolboxes/actions/workflows/build-latest.yml)
+[![build-beta](https://github.com/NyahStack/fedora-toolboxes/actions/workflows/build-beta.yml/badge.svg)](https://github.com/NyahStack/fedora-toolboxes/actions/workflows/build-beta.yml)
+
+Versioned Fedora toolbox images for Distrobox/Toolbox, built with a `ublue-os/main` style pipeline.
+
+## Why This Exists
+
+`ublue-os/main` and `ublue-os/bazzite` emphasize reproducible, continuously rebuilt images with clear release lanes and signed outputs.
+
+`ublue-os/toolboxes` is excellent for breadth across many toolbox/app images, but its Fedora toolbox flow is primarily single-track (`latest`) and less strict about lane-based version control.
+
+This repository exists to keep Fedora toolbox images on a stricter update model:
+
+- Explicit release lanes (`gts`, `latest`, `beta`)
+- Digest-pinned upstream inputs in `image-versions.yaml`
+- CI that rebuilds when pinned upstream digests or relevant repo content changes
+- Signed GHCR outputs for a NyahStack-maintained toolbox track
+
+## How To Use These Images
+
+If you are unsure which variant to use, start with `-main` on `:latest`:
+
+- `ghcr.io/nyahstack/fedora-toolbox-main:latest`
+
+All images are published in release lanes:
+
+- `gts` -> Fedora 42
+- `latest` -> Fedora 43
+- `beta` -> Fedora 44
+
+So you pick:
+1. an image variant (main/systemd, with or without nvidia)
+2. a lane tag (`gts`, `latest`, or `beta`)
+
+Image naming pattern:
+
+- `ghcr.io/nyahstack/fedora-toolbox<SUFFIX>:<lane>`
+
+## Variant Suffixes
+
+### `-main`
+
+Why it exists:
+- Provide a default toolbox that includes the desktop-adjacent runtime pieces many apps expect.
+- Reduce "missing library/runtime" friction so app containers and downloaded binaries (`tar.gz`, etc.) work out of the box more often.
+
+What it provides:
+- Base image: `registry.fedoraproject.org/fedora-toolbox:<fedora-version>` (pinned by digest in `image-versions.yaml`).
+- Shared package set from `packages.json` (`all.include.all`, currently 97 packages), including common desktop/runtime dependencies used by GUI and multimedia apps.
+- Distrobox integration tooling (`distrobox-host-exec` + `host-spawn`) from `build_files/install.sh`.
+- For non-systemd images, `/usr/bin/flatpak` is symlinked to `distrobox-host-exec` during build.
+
+### `-systemd`
+
+Why it exists:
+- Support a more isolated container model that still integrates with important desktop behavior.
+
+What it provides:
+- Everything from `-main`, plus systemd-specific package additions from `packages.json`:
+  `dbus-daemon`, `flatpak`, `podman`, `systemd`.
+- Systemd-specific filesystem overlay from `sys_files/systemd/fedora-toolbox-systemd`.
+- Enabled system services in build: `host-timezone-sync.service` and `podman-subids-setup.service`.
+- Flathub remote file provisioning at `/etc/flatpak/remotes.d/flathub.flatpakrepo`.
+- Design intent: feel closer to a separate host while remaining part of the same desktop experience.
+- Planned direction: fuller dbus-proxy integration for desktop settings paths such as dconf/theme/window-decoration behavior.
+- Intended runtime mode is `distrobox create --init`.
+
+### `-nvidia`
+
+Why it exists:
+- NVIDIA hosts need explicit driver integration in the container.
+
+What it provides:
+- Built from the `nvidia` Containerfile target (`FROM main as nvidia`), so it includes the base variant first.
+- NVIDIA addon install path from `build_files/nvidia-install.sh`: `ublue-os-nvidia-addons` RPM payload from upstream akmods image, NVIDIA userspace libraries (`nvidia-driver-libs`, `nvidia-driver-cuda-libs`, `libnvidia-fbc`, etc.), and multilib graphics stack packages (`mesa-* .i686`).
+- Intended runtime mode is `distrobox create --nvidia`.
+
+Suffixes combine as follows:
+
+- `-main`: default non-NVIDIA variant
+- `-nvidia`: `-main` behavior plus NVIDIA integration
+- `-systemd-main`: systemd mode plus non-NVIDIA variant
+- `-systemd-nvidia`: systemd mode plus NVIDIA integration
+
+`main` in the image name means non-NVIDIA variant, not the release lane.
+
+## Build and CI Model
+
+Workflows:
+
+- [`build-gts.yml`](./.github/workflows/build-gts.yml)
+- [`build-latest.yml`](./.github/workflows/build-latest.yml)
+- [`build-beta.yml`](./.github/workflows/build-beta.yml)
+
+All three call [`reusable-build.yml`](./.github/workflows/reusable-build.yml), which:
+
+- Resolves lane aliases from `Justfile`
+- Compares pinned digests from `image-versions.yaml`
+- Forces rebuilds if non-digest content changed
+- Builds with `just`, pushes to GHCR, and signs with cosign
+
+## Downstream Use
+
+This repository is intended to be consumed by downstream image projects that want stable, versioned Fedora toolbox bases.
+
+Downstreams can track lane tags (`gts`, `latest`, `beta`) or specific dated/version tags from this repo and rebuild on their own cadence.
+
+Example downstream:
+
+- [`NyahStack/lair`](https://github.com/NyahStack/lair)
+
+## Distrobox Examples
+
+Run these on the host.
+
+```bash
+# Main image (latest lane)
+distrobox create --name nyah-fedora-main --image ghcr.io/nyahstack/fedora-toolbox-main:latest
+distrobox enter nyah-fedora-main
+
+# Main NVIDIA image (latest lane)
+distrobox create --name nyah-fedora-main-nvidia --image ghcr.io/nyahstack/fedora-toolbox-nvidia:latest --nvidia
+distrobox enter nyah-fedora-main-nvidia
+
+# Systemd image (latest lane, requires --init for systemd as PID 1)
+distrobox create --name nyah-fedora-systemd --image ghcr.io/nyahstack/fedora-toolbox-systemd-main:latest --init
+distrobox enter nyah-fedora-systemd
+
+# Systemd NVIDIA image (latest lane)
+distrobox create --name nyah-fedora-systemd-nvidia --image ghcr.io/nyahstack/fedora-toolbox-systemd-nvidia:latest --init --nvidia
+distrobox enter nyah-fedora-systemd-nvidia
+```
+
+To use a different lane, replace `:latest` with `:gts` or `:beta`.
+
+## Local Usage
+
+Requirements:
+
+- `podman`
+- `just`
+- `jq`
+- `yq`
+- `cosign`
+
+Examples:
+
+```bash
+# Build latest main variant
+just build fedora-toolbox latest main
+
+# Build beta nvidia variant
+just build fedora-toolbox beta nvidia
+
+# Run a built container
+just run fedora-toolbox latest main
+```
+
+## Verification
+
+Images are signed. Verify with:
+
+```bash
+cosign verify --key cosign.pub ghcr.io/nyahstack/fedora-toolbox-main:latest
+```
+
+If you are verifying without cloning this repository, use the hosted public key:
+
+```bash
+cosign verify --key https://raw.githubusercontent.com/NyahStack/fedora-toolboxes/main/cosign.pub ghcr.io/nyahstack/fedora-toolbox-main:latest
+```
+
+## Build Your Own Fork
+
+1. Fork this repository.
+2. Generate your own cosign key pair.
+3. Add your private key as GitHub Actions secret: `COSIGN_PRIVATE_KEY`.
+4. Replace `cosign.pub` in your fork with your public key.
+5. Enable GitHub Actions in your fork.
+
+### Repo Identity (Chronicle/Forks)
+
+If you run this from a different org/repo name (for example a Chronicle-managed repo), update the identity values in [`Justfile`](./Justfile):
+
+- `org := "..."`
+- `repo := "..."`
+
+These values drive image labels and registry naming (`IMAGE_REGISTRY`), so they should match your actual GitHub org/repo.
+
+Also update any README badge URLs so they point at the correct repository.
+
+## Renovate
+
+This repo includes project-level Renovate rules in [`.github/renovate.json5`](./.github/renovate.json5), including digest tracking for:
+
+- `registry.fedoraproject.org/*`
+- `ghcr.io/ublue-os/akmods-nvidia-open`
+
+Note: the digest update workflow in this project depends on a self-hosted Renovate setup with org-level inherited config. It does not behave the same way with the official hosted Renovate app.
+
+For self-hosted runner setup examples, org inheritance, and merge-queue/automerge requirements, see:
+
+- <https://github.com/NyahStack/renovate-config>
+- <https://github.com/ublue-os/renovate-config>
+
+## Upstream References
+
+- [`ublue-os/main`](https://github.com/ublue-os/main)
+- [`ublue-os/toolboxes`](https://github.com/ublue-os/toolboxes)
+- [`ublue-os/bazzite`](https://github.com/ublue-os/bazzite)

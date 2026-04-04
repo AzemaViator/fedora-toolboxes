@@ -1,0 +1,92 @@
+name: Probe Beta NVIDIA Re-enable
+
+on:
+  schedule:
+    - cron: "23 7 * * 1" # Weekly Monday
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+      packages: read
+      id-token: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Detect beta nvidia matrix state
+        id: beta_state
+        shell: bash
+        run: |
+          if grep -Eq '^[[:space:]]*-[[:space:]]*nvidia[[:space:]]*$' .github/workflows/build-beta.yml; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Just
+        if: steps.beta_state.outputs.enabled == 'false'
+        uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b # v3
+
+      - name: Install Cosign
+        if: steps.beta_state.outputs.enabled == 'false'
+        uses: sigstore/cosign-installer@ba7bc0a3fef59531c69a25acd34668d6d3fe6f22 # v4.1.0
+
+      - name: Mount BTRFS for podman storage
+        if: steps.beta_state.outputs.enabled == 'false'
+        uses: ublue-os/container-storage-action@dc1f4c8f17b672069e921f001132f7cf98a423a6
+        continue-on-error: true
+        with:
+          mount-opts: compress-force=zstd:2
+          loopback-free: "1"
+
+      - name: Probe beta nvidia builds
+        if: steps.beta_state.outputs.enabled == 'false'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          just build-container "fedora-toolbox" "beta" "nvidia" "workflow_dispatch"
+          just build-container "fedora-toolbox-systemd" "beta" "nvidia" "workflow_dispatch"
+
+      - name: Re-enable beta nvidia matrix
+        if: steps.beta_state.outputs.enabled == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+          perl -0pi -e 's/(image_variant:\n(\s*)- main\n)(?!\2- nvidia\n)/$1$2- nvidia\n/s' .github/workflows/build-beta.yml
+
+      - name: Detect re-enable change
+        id: changed
+        if: steps.beta_state.outputs.enabled == 'false'
+        shell: bash
+        run: |
+          if git diff --quiet -- .github/workflows/build-beta.yml; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create pull request
+        if: steps.beta_state.outputs.enabled == 'false' && steps.changed.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "ci(beta): re-enable nvidia matrix after probe pass"
+          branch: "automation/reenable-beta-nvidia"
+          delete-branch: true
+          title: "ci(beta): re-enable nvidia matrix"
+          body: |
+            Weekly probe passed for beta NVIDIA builds:
+            - `just build-container fedora-toolbox beta nvidia`
+            - `just build-container fedora-toolbox-systemd beta nvidia`
+
+            This PR re-enables `nvidia` in `.github/workflows/build-beta.yml`.
+          labels: |
+            automation
+            ci

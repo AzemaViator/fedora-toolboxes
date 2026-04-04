@@ -16,7 +16,7 @@ default_variant := "main"
 # Reused Values
 
 org := "NyahStack"
-repo := "fedora-toolbox"
+repo := "fedora-toolboxes"
 IMAGE_REGISTRY := "ghcr.io" / lowercase(org)
 
 # Upstream
@@ -170,7 +170,11 @@ build-container $image_name="" $fedora_version="" $variant="" $github="":
     # Verify Source Containers
     # TODO registry.fedoraproject.org does not sign images
     # {{ just }} verify-container "$source_image_name@$SOURCE_IMAGE_DIGEST" "{{ source_registry }}"
-    {{ just }} verify-container "akmods-nvidia-open@$AKMODS_NVIDIA_IMAGE_DIGEST" "{{ akmods_nvidia_registry }}" "https://raw.githubusercontent.com/ublue-os/main/main/cosign.pub"
+    {{ just }} verify-container \
+        "akmods-nvidia-open@$AKMODS_NVIDIA_IMAGE_DIGEST" \
+        "{{ akmods_nvidia_registry }}" \
+        "https://raw.githubusercontent.com/ublue-os/main/main/cosign.pub" \
+        "{{ justfile_dir() }}/build_files/keys/ublue-os-main-cosign.pub"
 
     # Tags
     declare -A gen_tags="($({{ just }} gen-tags $image_name $fedora_version $variant))"
@@ -360,6 +364,59 @@ check:
     echo "Checking syntax: Justfile" >&2
     {{ just }} --unstable --fmt --check -f Justfile
 
+# List local GitHub Actions jobs using act
+[group('Utility')]
+act-list:
+    #!/usr/bin/env bash
+    set ${SET_X:+-x} -eou pipefail
+    ACT_BIN="act"
+    if ! command -v act >/dev/null 2>&1; then
+        if ! command -v mise >/dev/null 2>&1; then
+            echo "{{ style('error') }}NOTICE: act is not installed and mise is unavailable.{{ NORMAL }}" >&2
+            exit 1
+        fi
+        ACT_BIN="$(mise which act)"
+    fi
+
+    shopt -s nullglob
+    for workflow in .github/workflows/*.yml; do
+        if ! "$ACT_BIN" --list --workflows "$workflow" --no-recurse; then
+            echo "{{ style('warning') }}Warning{{ NORMAL }}: act could not parse $workflow" >&2
+        fi
+    done
+
+# Run a GitHub Actions workflow locally using act
+[group('Utility')]
+act-run $workflow=".github/workflows/build-beta.yml" $job="" $event="workflow_dispatch" $platform="ubuntu-latest=ghcr.io/catthehacker/ubuntu:act-latest" $extra="":
+    #!/usr/bin/env bash
+    set ${SET_X:+-x} -eou pipefail
+
+    if [[ -S "${XDG_RUNTIME_DIR:-}/podman/podman.sock" && -z "${DOCKER_HOST:-}" ]]; then
+        export DOCKER_HOST="unix://${XDG_RUNTIME_DIR}/podman/podman.sock"
+    fi
+
+    args=("$event" "-W" "$workflow" "-P" "$platform")
+    args+=("--no-recurse")
+    args+=("--concurrent-jobs" "1")
+    if [[ -n "$job" ]]; then
+        args+=("-j" "$job")
+    fi
+    if [[ -n "$extra" ]]; then
+        read -r -a extra_args <<< "$extra"
+        args+=("${extra_args[@]}")
+    fi
+
+    ACT_BIN="act"
+    if ! command -v act >/dev/null 2>&1; then
+        if ! command -v mise >/dev/null 2>&1; then
+            echo "{{ style('error') }}NOTICE: act is not installed and mise is unavailable.{{ NORMAL }}" >&2
+            exit 1
+        fi
+        ACT_BIN="$(mise which act)"
+    fi
+
+    "$ACT_BIN" "${args[@]}"
+
 # Fix Just Syntax
 [group('Just')]
 fix:
@@ -373,19 +430,242 @@ fix:
 
 # Verify Container with Cosign
 [group('Utility')]
-verify-container $container="" $registry="" $key="":
+verify-container $container="" $registry="" $key="" $fallback_key="":
     #!/usr/bin/env bash
     set ${SET_X:+-x} -eou pipefail
 
-    # Defaults: fall back to local registry and public key
+    # Defaults: fall back to local registry and repository signing key.
     : "${registry:={{ IMAGE_REGISTRY }}}"
     : "${key:=https://raw.githubusercontent.com/{{ org }}/{{ repo }}/main/cosign.pub}"
+    : "${fallback_key:=}"
 
-    # Verify Container using cosign public key
-    if ! cosign verify --key "$key" "$registry/$container" >/dev/null; then
-        echo '{{ style('error') }}NOTICE: Verification failed. Please ensure your public key is correct.{{ NORMAL }}' >&2
+    default_repo_key="{{ justfile_dir() }}/cosign.pub"
+    default_ublue_key="{{ justfile_dir() }}/build_files/keys/ublue-os-main-cosign.pub"
+
+    is_valid_pubkey() {
+        local file="$1"
+        [[ -s "$file" ]] \
+            && grep -q "BEGIN PUBLIC KEY" "$file" \
+            && grep -q "END PUBLIC KEY" "$file"
+    }
+
+    warn() {
+        local msg="$1"
+        if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+            echo "::warning::${msg}"
+        else
+            echo "{{ style('warning') }}Warning{{ NORMAL }}: ${msg}" >&2
+        fi
+    }
+
+    download_key_url() {
+        local url="$1"
+        local out="$2"
+        local owner repo ref path api_url
+
+        if [[ -n "${GITHUB_TOKEN:-}" && "$url" =~ ^https://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)/(.+)$ ]]; then
+            owner="${BASH_REMATCH[1]}"
+            repo="${BASH_REMATCH[2]}"
+            ref="${BASH_REMATCH[3]}"
+            path="${BASH_REMATCH[4]}"
+            api_url="https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${ref}"
+
+            if curl --fail --silent --show-error --location --retry 3 --retry-delay 2 \
+                -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                -H "Accept: application/vnd.github.raw" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "$api_url" -o "$out" >/dev/null 2>&1; then
+                return 0
+            fi
+
+            warn "GitHub API key fetch failed for '$url', retrying without token."
+        fi
+
+        if [[ -n "${GITHUB_TOKEN:-}" && "$url" =~ ^https://github\.com/([^/]+)/([^/]+)/raw/([^/]+)/(.+)$ ]]; then
+            owner="${BASH_REMATCH[1]}"
+            repo="${BASH_REMATCH[2]}"
+            ref="${BASH_REMATCH[3]}"
+            path="${BASH_REMATCH[4]}"
+            api_url="https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${ref}"
+
+            if curl --fail --silent --show-error --location --retry 3 --retry-delay 2 \
+                -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                -H "Accept: application/vnd.github.raw" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "$api_url" -o "$out" >/dev/null 2>&1; then
+                return 0
+            fi
+
+            warn "GitHub API key fetch failed for '$url', retrying without token."
+        fi
+
+        curl --fail --silent --show-error --location --retry 3 --retry-delay 2 "$url" -o "$out"
+    }
+
+    if [[ -z "${fallback_key}" ]]; then
+        case "$key" in
+            "https://raw.githubusercontent.com/{{ org }}/{{ repo }}/main/cosign.pub")
+                fallback_key="$default_repo_key"
+                ;;
+            "https://raw.githubusercontent.com/ublue-os/main/main/cosign.pub")
+                fallback_key="$default_ublue_key"
+                ;;
+            *)
+                fallback_key="$default_repo_key"
+                ;;
+        esac
+    fi
+
+    resolved_key="$key"
+    tmp_key=""
+    cleanup() {
+        if [[ -n "${tmp_key:-}" && -f "$tmp_key" ]]; then
+            rm -f "$tmp_key"
+        fi
+    }
+    trap cleanup EXIT
+
+    if [[ "$key" =~ ^https?:// ]]; then
+        tmp_key="$(mktemp)"
+        if download_key_url "$key" "$tmp_key" && is_valid_pubkey "$tmp_key"; then
+            resolved_key="$tmp_key"
+            if [[ -f "$fallback_key" ]] && is_valid_pubkey "$fallback_key" && ! cmp -s "$tmp_key" "$fallback_key"; then
+                warn "Fallback key '$fallback_key' is out of date with '$key'."
+            fi
+        elif [[ -f "$fallback_key" ]] && is_valid_pubkey "$fallback_key"; then
+            warn "Unable to use signing key URL '$key', falling back to '$fallback_key'."
+            resolved_key="$fallback_key"
+        else
+            echo "{{ style('error') }}NOTICE: Unable to load signing key from '$key' and fallback '$fallback_key' is missing/invalid.{{ NORMAL }}" >&2
+            exit 1
+        fi
+    elif [[ -f "$key" ]] && is_valid_pubkey "$key"; then
+        resolved_key="$key"
+    elif [[ -f "$fallback_key" ]] && is_valid_pubkey "$fallback_key"; then
+        warn "Key '$key' is missing/invalid, falling back to '$fallback_key'."
+        resolved_key="$fallback_key"
+    else
+        echo "{{ style('error') }}NOTICE: Signing key '$key' is missing/invalid and no usable fallback key was found.{{ NORMAL }}" >&2
         exit 1
     fi
+
+    # Verify Container using cosign public key
+    if ! cosign verify --key "$resolved_key" "$registry/$container" >/dev/null; then
+        echo "{{ style('error') }}NOTICE: Verification failed. Please ensure your public key is correct.{{ NORMAL }}" >&2
+        exit 1
+    fi
+
+[group('CI')]
+check-fallback-key $key_url="" $fallback_key="" $label="":
+    #!/usr/bin/env bash
+    set ${SET_X:+-x} -eou pipefail
+
+    if [[ -z "${key_url}" || -z "${fallback_key}" ]]; then
+        echo "{{ style('error') }}NOTICE: check-fallback-key requires key_url and fallback_key.{{ NORMAL }}" >&2
+        exit 1
+    fi
+
+    : "${label:=${fallback_key}}"
+
+    is_valid_pubkey() {
+        local file="$1"
+        [[ -s "$file" ]] \
+            && grep -q "BEGIN PUBLIC KEY" "$file" \
+            && grep -q "END PUBLIC KEY" "$file"
+    }
+
+    warn() {
+        local msg="$1"
+        if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+            echo "::warning::${msg}"
+        else
+            echo "{{ style('warning') }}Warning{{ NORMAL }}: ${msg}" >&2
+        fi
+    }
+
+    download_key_url() {
+        local url="$1"
+        local out="$2"
+        local owner repo ref path api_url
+
+        if [[ -n "${GITHUB_TOKEN:-}" && "$url" =~ ^https://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)/(.+)$ ]]; then
+            owner="${BASH_REMATCH[1]}"
+            repo="${BASH_REMATCH[2]}"
+            ref="${BASH_REMATCH[3]}"
+            path="${BASH_REMATCH[4]}"
+            api_url="https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${ref}"
+            if curl --fail --silent --show-error --location --retry 3 --retry-delay 2 \
+                -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                -H "Accept: application/vnd.github.raw" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "$api_url" -o "$out" >/dev/null 2>&1; then
+                return 0
+            fi
+        fi
+
+        if [[ -n "${GITHUB_TOKEN:-}" && "$url" =~ ^https://github\.com/([^/]+)/([^/]+)/raw/([^/]+)/(.+)$ ]]; then
+            owner="${BASH_REMATCH[1]}"
+            repo="${BASH_REMATCH[2]}"
+            ref="${BASH_REMATCH[3]}"
+            path="${BASH_REMATCH[4]}"
+            api_url="https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${ref}"
+            if curl --fail --silent --show-error --location --retry 3 --retry-delay 2 \
+                -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                -H "Accept: application/vnd.github.raw" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "$api_url" -o "$out" >/dev/null 2>&1; then
+                return 0
+            fi
+        fi
+
+        curl --fail --silent --show-error --location --retry 3 --retry-delay 2 "$url" -o "$out"
+    }
+
+    if [[ ! -f "${fallback_key}" ]]; then
+        warn "Fallback key '${label}' is missing at '${fallback_key}'."
+        exit 0
+    fi
+
+    if ! is_valid_pubkey "${fallback_key}"; then
+        warn "Fallback key '${label}' at '${fallback_key}' is not a valid PEM public key."
+        exit 0
+    fi
+
+    tmp_key="$(mktemp)"
+    cleanup() {
+        if [[ -f "${tmp_key}" ]]; then
+            rm -f "${tmp_key}"
+        fi
+    }
+    trap cleanup EXIT
+
+    if ! download_key_url "${key_url}" "${tmp_key}"; then
+        warn "Unable to fetch upstream key '${key_url}' while checking '${label}'."
+        exit 0
+    fi
+
+    if ! is_valid_pubkey "${tmp_key}"; then
+        warn "Fetched upstream key '${key_url}' for '${label}' is not valid PEM."
+        exit 0
+    fi
+
+    if ! cmp -s "${tmp_key}" "${fallback_key}"; then
+        warn "Fallback key '${label}' is out of date with '${key_url}'. Please update '${fallback_key}'."
+        if [[ "${FAIL_ON_KEY_DRIFT:-0}" == "1" ]]; then
+            echo "{{ style('error') }}NOTICE: FAIL_ON_KEY_DRIFT=1 and fallback key '${label}' is stale.{{ NORMAL }}" >&2
+            exit 1
+        fi
+    fi
+
+[group('CI')]
+check-fallback-keys:
+    #!/usr/bin/env bash
+    set ${SET_X:+-x} -eou pipefail
+
+    {{ just }} check-fallback-key \
+        "https://raw.githubusercontent.com/ublue-os/main/main/cosign.pub" \
+        "{{ justfile_dir() }}/build_files/keys/ublue-os-main-cosign.pub" \
+        "ublue-os/main"
 
 # Removes all Tags of an image from container storage.
 [group('Utility')]
