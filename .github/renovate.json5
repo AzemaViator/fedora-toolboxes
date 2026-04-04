@@ -8,16 +8,6 @@
     {
       "customType": "regex",
       "managerFilePatterns": [
-        "/image-versions(\\.[^.]+)?\\.(yaml|yml)$/"
-      ],
-      "matchStrings": [
-        "image:\\s*(?<packageName>\\S+)\\s*tag:\\s*(?<currentValue>\\S+)\\s*digest:\\s*(?<currentDigest>sha256:[a-f0-9]+)"
-      ],
-      "datasourceTemplate": "docker"
-    },
-    {
-      "customType": "regex",
-      "managerFilePatterns": [
         "/build_files/versions\\.env$/"
       ],
       "matchStrings": [
