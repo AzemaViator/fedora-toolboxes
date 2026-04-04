@@ -70,8 +70,6 @@ SUDOIF := if `id -u` == "0" { "" } else if SUDO_DISPLAY != "" { which("sudo") + 
 just := just_executable()
 [private]
 PODMAN := which("podman") || require("podman-remote")
-[private]
-MISE := which("mise") || require("mise")
 
 # Make things quieter by default
 
@@ -373,7 +371,11 @@ act-list:
     set ${SET_X:+-x} -eou pipefail
     ACT_BIN="act"
     if ! command -v act >/dev/null 2>&1; then
-        ACT_BIN="$({{ MISE }} which act)"
+        if ! command -v mise >/dev/null 2>&1; then
+            echo "{{ style('error') }}NOTICE: act is not installed and mise is unavailable.{{ NORMAL }}" >&2
+            exit 1
+        fi
+        ACT_BIN="$(mise which act)"
     fi
 
     shopt -s nullglob
@@ -406,7 +408,11 @@ act-run $workflow=".github/workflows/build-beta.yml" $job="" $event="workflow_di
 
     ACT_BIN="act"
     if ! command -v act >/dev/null 2>&1; then
-        ACT_BIN="$({{ MISE }} which act)"
+        if ! command -v mise >/dev/null 2>&1; then
+            echo "{{ style('error') }}NOTICE: act is not installed and mise is unavailable.{{ NORMAL }}" >&2
+            exit 1
+        fi
+        ACT_BIN="$(mise which act)"
     fi
 
     "$ACT_BIN" "${args[@]}"
